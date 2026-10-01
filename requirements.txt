@@ -1,0 +1,8 @@
+# HopCheck - Computer Networks Mini Project
+# Target platform: Windows 10 / Windows 11 (VS Code terminal)
+# Runtime dependency: Python 3.8 or newer (standard library only)
+#
+# This project intentionally has NO third-party dependencies.
+# Everything (sockets, subprocess, statistics, unittest) comes from
+# the Python standard library, so `pip install -r requirements.txt`
+# is a no-op and there is nothing to download.
