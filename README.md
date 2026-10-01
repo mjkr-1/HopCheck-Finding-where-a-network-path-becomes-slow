@@ -446,14 +446,3 @@ terminal formatting and the diagnosis text.
 
 ---
 
-## Team / Submission
-
-Fill in before submission:
-
-| Item | Detail |
-|------|--------|
-| Team members | |
-| Roll numbers | |
-| Course | Computer Networks |
-| Institution | |
-| Date | |
