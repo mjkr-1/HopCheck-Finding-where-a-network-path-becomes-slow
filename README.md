@@ -263,7 +263,7 @@ Probe Count     : 5
 Maximum Hop     : 15
 Probe Timeout   : 1.0 s
 
-Tracing route (this can take up to 45 seconds)...
+Tracing and measuring route (up to 45 seconds)...
 
   1   10.65.17.72        4.2 ms
   2   192.0.0.1          6.3 ms
@@ -271,17 +271,17 @@ Tracing route (this can take up to 45 seconds)...
   ...
   15  163.70.146.174    94.0 ms
 
-ROUTE
+ROUTE AND MEASUREMENTS
 ------------------------------------------------------------
-Hop  IP Address         Avg RTT   Loss  Status
------------------------------------------------------------
-1    10.65.17.72         4.2 ms     0%  NORMAL
-2    192.0.0.1          6.3 ms *   100%  NORMAL
-3    *                        -   100%  TIMEOUT
- ...
-15   163.70.146.174     94.0 ms     0%  DESTINATION
+Hop  IP Address          Min      Avg     Max   Loss  Status
+-------------------------------------------------------------------------
+1    10.65.17.72         2.0      4.2     6.0     0%  NORMAL
+2    192.0.0.1           6.3    6.3 *     6.3   100%  NORMAL
+3    *                     -        -       -   100%  TIMEOUT
+  ...
+15   163.70.146.174     87.0     94.0   101.0     0%  DESTINATION
 
-*  answered tracert but ignored ICMP echo; RTT is one traceroute sample
+*  RTT from tracert, not echo probes (see Analysis)
 
 ANALYSIS
 ------------------------------------------------------------
@@ -297,16 +297,13 @@ but the hops in between never answered, so the exact point
 where it was added cannot be determined from this run.
 
 Hops 3-14 did not respond to any probe (12 hops).
-Routers commonly de-prioritise or rate-limit ICMP, so silent hops do
-not prove the data path is broken: Hop 15 still answers.
+Routers commonly de-prioritise ICMP, so this does not by itself
+mean the path is broken: Hop 15 still answers.
 
-Assessment:
-INCREASED PATH LATENCY, SLOW HOP NOT IDENTIFIED
+Assessment: INCREASED PATH LATENCY, SLOW HOP NOT IDENTIFIED
 
-Note:
-Intermediate routers may rate-limit or delay diagnostic
-responses. Therefore, a high RTT at one hop alone is not
-sufficient evidence of network slowdown.
+Note: intermediate routers may rate-limit or delay ICMP replies, so a high RTT
+at one hop alone is not sufficient evidence of network slowdown.
 
 ============================================================
 ```
@@ -334,13 +331,10 @@ Increase              : +35.5 ms
 
 Subsequent hops remained elevated (5, 6).
 
-Assessment:
-POSSIBLE PATH DEGRADATION
+Assessment: POSSIBLE PATH DEGRADATION
 
-Note:
-Intermediate routers may rate-limit or delay diagnostic
-responses. Therefore, a high RTT at one hop alone is not
-sufficient evidence of network slowdown.
+Note: intermediate routers may rate-limit or delay ICMP replies, so a high RTT
+at one hop alone is not sufficient evidence of network slowdown.
 
 ============================================================
 ```
@@ -360,16 +354,15 @@ Increase              : +90.0 ms
 This may indicate delayed or rate-limited ICMP responses by that
 router rather than actual path degradation.
 
-Assessment:
-NO PERSISTENT SLOWDOWN DETECTED
+Assessment: NO PERSISTENT SLOWDOWN DETECTED
 ```
 
 ### Silent-hop example
 
 ```
 Hops 3-11 did not respond to any probe (9 hops).
-Routers commonly de-prioritise or rate-limit ICMP, so silent hops do
-not prove the data path is broken: Hop 12 still answers.
+Routers commonly de-prioritise ICMP, so this does not by itself
+mean the path is broken: Hop 12 still answers.
 ```
 
 ---
@@ -440,7 +433,7 @@ Run the tests (no internet connection required):
 python -m unittest discover -s tests -v
 ```
 
-The suite has 125 tests covering the analysis rules, the Windows command-line
+The suite has 128 tests covering the analysis rules, the Windows command-line
 output parsers, name resolution and IPv6 fallback, the input validation, the
 terminal formatting and the diagnosis text.
 

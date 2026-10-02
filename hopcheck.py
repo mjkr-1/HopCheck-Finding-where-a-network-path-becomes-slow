@@ -39,10 +39,8 @@ MIN_HOPS, MAX_HOPS = 1, 64
 LABEL_WIDTH = 22
 
 CAVEAT = (
-    "Note:\n"
-    "Intermediate routers may rate-limit or delay diagnostic\n"
-    "responses. Therefore, a high RTT at one hop alone is not\n"
-    "sufficient evidence of network slowdown."
+    "Note: intermediate routers may rate-limit or delay ICMP replies, so a high RTT\n"
+    "at one hop alone is not sufficient evidence of network slowdown."
 )
 
 
@@ -71,15 +69,16 @@ def main() -> int:
         ]
     )
 
-    print("\nTracing route (this can take up to {0} seconds)...\n".format(int(max_hops * 3)))
+    print("\nTracing and measuring route (up to {0} seconds)...\n".format(int(max_hops * 3)))
     try:
         hops = discover_route(
             destination,
             max_hops=max_hops,
             timeout=PROBE_TIMEOUT,
             resolved_ip=resolved_ip,
+            on_progress=_print_progress,
         )
-        measure_route(hops, probes=probes, timeout=PROBE_TIMEOUT, on_progress=_print_progress)
+        measure_route(hops, probes=probes, timeout=PROBE_TIMEOUT)
     except TracerouteError as exc:
         print("\nERROR: {0}".format(exc))
         return 1
@@ -92,11 +91,8 @@ def main() -> int:
     stats = compute_all(hops)
     analysis = analyze(stats)
 
-    print(utils.section("route"))
-    emit(build_route_table(stats, analysis))
-
-    print(utils.section("per-hop measurements"))
-    emit(build_statistics_table(stats))
+    print(utils.section("route and measurements"))
+    emit(build_hop_table(stats, analysis))
 
     print(utils.section("analysis"))
     emit(build_analysis(analysis, stats, max_hops=max_hops))
@@ -115,59 +111,52 @@ def _trace_family(hops: Sequence[Hop]) -> str:
 
 
 def _print_progress(hop: Hop) -> None:
-    """One line per hop as it is measured, in the style of tracert."""
+    """One line per hop while the trace runs, so a slow run does not look hung.
+
+    Progress output is printed without the measurements; every number shown here
+    appears again in the ROUTE table once the run finishes.
+    """
     if not hop.responded:
         print("  {0:<4}{1}".format(hop.number, utils.TIMEOUT_TEXT))
         return
-    values = hop.observed_rtts
-    average = sum(values) / len(values) if values else None
-    print("  {0:<4}{1:<16}{2:>9}".format(hop.number, hop.address, utils.format_ms(average)))
+    print("  {0:<4}{1}".format(hop.number, hop.address))
 
 
-def build_route_table(stats: Sequence[HopStats], analysis: Analysis) -> List[str]:
-    """One row per hop.
+def build_hop_table(stats: Sequence[HopStats], analysis: Analysis) -> List[str]:
+    """One row per hop, carrying both identity and measurements.
 
-    A hop that never answered an echo request but still revealed itself during
-    discovery is marked with `*`, because its RTT is a single traceroute sample
-    rather than the requested number of probes.  Claiming a plain average next to
-    100 % loss would otherwise look self-contradictory.
+    The route and the per-hop statistics used to be printed as two separate
+    tables that repeated the same hop numbers, addresses and averages.  They are
+    merged here so each hop is described exactly once: min/avg/max show the
+    latency spread that repeated probes produce, and `Status` is the verdict the
+    analyser reached for that hop.
+
+    A hop that revealed itself during discovery but ignored every echo request is
+    marked `*`, because its RTT is a single tracert sample rather than the
+    requested number of probes.  A plain average printed next to 100 % loss would
+    otherwise look self-contradictory.
     """
     statuses = analysis.statuses
-    headers = ("Hop", "IP Address", "Avg RTT", "Loss", "Status")
-    rows = [
-        (
-            entry.hop,
-            entry.address if entry.responded else "*",
-            utils.format_ms(entry.avg_rtt, suffix=" ms *")
-            if entry.echo_suppressed
-            else utils.format_ms(entry.avg_rtt),
-            utils.format_percent(entry.loss_percent),
-            statuses.get(entry.hop, ""),
+    headers = ("Hop", "IP Address", "Min", "Avg", "Max", "Loss", "Status")
+    rows = []
+    for entry in stats:
+        mark = " *" if entry.echo_suppressed else ""
+        rows.append(
+            (
+                entry.hop,
+                entry.address if entry.responded else "*",
+                utils.format_ms(entry.min_rtt, suffix=""),
+                utils.format_ms(entry.avg_rtt, suffix=mark),
+                utils.format_ms(entry.max_rtt, suffix=""),
+                utils.format_percent(entry.loss_percent),
+                statuses.get(entry.hop, ""),
+            )
         )
-        for entry in stats
-    ]
-    table = utils.format_table(headers, rows, aligns="llrrl", min_widths=(3, 15, 9, 5, 19))
+    table = utils.format_table(headers, rows, aligns="llrrrrl", min_widths=(3, 15, 6, 7, 6, 5, 19))
     if any(entry.echo_suppressed for entry in stats):
         table.append("")
-        table.append("*  answered tracert but ignored ICMP echo; RTT is one traceroute sample")
+        table.append("*  RTT from tracert, not echo probes (see Analysis)")
     return table
-
-
-def build_statistics_table(stats: Sequence[HopStats]) -> List[str]:
-    headers = ("Hop", "Sent", "Recv", "Loss", "Min", "Avg", "Max")
-    rows = [
-        (
-            entry.hop,
-            entry.sent,
-            entry.received,
-            utils.format_percent(entry.loss_percent),
-            utils.format_ms(entry.min_rtt, suffix=""),
-            utils.format_ms(entry.avg_rtt, suffix=""),
-            utils.format_ms(entry.max_rtt, suffix=""),
-        )
-        for entry in stats
-    ]
-    return utils.format_table(headers, rows, aligns="rrrrrrr", min_widths=(3, 4, 4, 4, 6, 6, 6))
 
 
 def build_analysis(
@@ -227,26 +216,28 @@ def build_analysis(
     lines.extend(_observations(analysis, stats, max_hops))
 
     lines.append("")
-    lines.append("Assessment:")
-    lines.append(analysis.assessment)
+    lines.append("Assessment: {0}".format(analysis.assessment))
     lines.append("")
     lines.append(CAVEAT)
     return lines
 
 
 def _evidence(finding: HopVerdict) -> List[str]:
+    """One line summarising the jump that triggered the finding.
+
+    The per-hop min/avg/max are already in the route table, so only the derived
+    increase is added here: it is the number that connects two table rows and is
+    not visible from either one alone.
+    """
     return [
         "",
-        "{0}: {1}  (Hop {2})".format(
-            _label("Previous average RTT"),
+        "Latency rose from {0} at Hop {1} to {2} at Hop {3} ({4}).".format(
             utils.format_ms(finding.previous_avg),
             finding.previous_hop,
-        ),
-        "{0}: {1}".format(
-            _label("Hop {0} average RTT".format(finding.hop)),
             utils.format_ms(finding.avg_rtt),
+            finding.hop,
+            utils.format_signed_ms(finding.increase),
         ),
-        "{0}: {1}".format(_label("Increase"), utils.format_signed_ms(finding.increase)),
     ]
 
 
@@ -257,70 +248,79 @@ def _label(text: str) -> str:
 def _observations(
     analysis: Analysis, stats: Sequence[HopStats], max_hops: Optional[int] = None
 ) -> List[str]:
+    """Explanatory notes about loss, silence and reachability.
+
+    Each observation is one short paragraph.  Every fact here is also visible in
+    the route table, so these lines explain *why* a number looks the way it does
+    rather than repeating the number itself.
+    """
     lines: List[str] = []
     timeout_hops = [verdict.hop for verdict in analysis.timeout_hops]
+    reported_later: set = set()
 
     for run in _consecutive_runs(timeout_hops):
         later = _next_responding(analysis, run[-1])
         label = "Hop {0}".format(run[0]) if len(run) == 1 else "Hops {0}".format(utils.hop_ranges(run))
         lines.append("")
-        if len(run) == 1:
-            lines.append("{0} did not respond to any probe.".format(label))
-        else:
-            lines.append("{0} did not respond to any probe ({1} hops).".format(label, len(run)))
+        lines.append(
+                "{0} did not respond to any probe.".format(label)
+                if len(run) == 1
+                else "{0} did not respond to any probe ({1} hops).".format(label, len(run))
+            )
         if not analysis.destination_reached:
             lines.append("The trace ran out of hops before the destination answered, so the")
             lines.append("rest of the path could not be observed in this run.")
         elif later is None:
-            lines.append("No later hop answered either, so the path could not be traced")
-            lines.append("any further. This may be a blocked or non-routable destination.")
+            lines.append("No later hop answered either; the destination may be blocked.")
         else:
-            lines.append("Routers commonly de-prioritise or rate-limit ICMP, so silent hops do")
-            lines.append("not prove the data path is broken: Hop {0} still answers.".format(later))
-
-    if analysis.assessment == ASSESSMENT_UNLOCALISED:
-        lines.append("")
-        lines.append(
-            "This is normal on many ISP networks, where transit routers drop ICMP but"
-        )
-        lines.append("still carry the traffic at full speed.")
+            reported_later.add(later)
+            lines.append("Routers commonly de-prioritise ICMP, so this does not by itself")
+            lines.append("mean the path is broken: Hop {0} still answers.".format(later))
 
     for verdict in analysis.lossy_hops:
-        if verdict.kind == KIND_TEMPORARY_ANOMALY or verdict.kind == KIND_TIMEOUT:
+        if verdict.kind in (KIND_TEMPORARY_ANOMALY, KIND_TIMEOUT):
             continue
         later = _next_responding(analysis, verdict.hop)
-        lines.append("")
-        lines.append(
-            "Hop {0} lost {1} of its probes.".format(
-                verdict.hop, utils.format_percent(verdict.loss_percent)
-            )
+        suppressed = next(
+            (
+                entry
+                for entry in stats
+                if entry.hop == verdict.hop and entry.echo_suppressed and entry.received == 0
+            ),
+            None,
         )
-        if later is not None:
-            lines.append("Hop {0} still answers normally, so the path is not classified".format(later))
-            lines.append("as broken.")
-        elif verdict.kind == KIND_DESTINATION:
-            lines.append("This is the destination hop, so the loss is confined to the last")
-            lines.append("segment of the path.")
-        else:
-            lines.append("No later hop answered, so this run cannot describe the rest of the path.")
-
-    for entry in stats:
-        if entry.echo_suppressed and entry.responded and entry.received == 0:
-            lines.append("")
+        lines.append("")
+        if suppressed is not None:
             lines.append(
-                "Hop {0} answered traceroute but ignored ICMP echo requests;".format(entry.hop)
+                "Hop {0} answered tracert but ignored all {1} echo probes, so its RTT "
+                "is a single sample (marked *).".format(verdict.hop, suppressed.sent)
             )
-            lines.append("its RTT comes from the traceroute sample.")
+        else:
+            lines.append(
+                "Hop {0} lost {1} of its probes.".format(
+                    verdict.hop, utils.format_percent(verdict.loss_percent)
+                )
+            )
+        # A later answering hop has already been named by the silence note, so
+        # repeating it here would only add a line without adding information.
+        if later is not None and later in reported_later:
+            pass
+        elif later is not None:
+            lines.append("Hop {0} still answers, so the path is not called broken.".format(later))
+        elif verdict.kind == KIND_DESTINATION:
+            lines.append("The loss is confined to the last segment of the path.")
+        else:
+            lines.append("No later hop answered, so the rest of the path cannot be described.")
 
     if not analysis.destination_reached:
         lines.append("")
-        lines.append("The destination was not reached within the given hop limit.")
+        lines.append("The destination was not reached within the hop limit.")
         if max_hops:
-            lines.append("Try again with a larger maximum hop count, for example {0}.".format(max_hops * 2))
+            lines.append("Try a larger maximum hop count, for example {0}.".format(max_hops * 2))
 
     if analysis.assessment == ASSESSMENT_UNREACHABLE:
         lines.append("")
-        lines.append("No hop on this path answered, so no latency comparison is possible.")
+        lines.append("No hop answered, so no latency comparison is possible.")
 
     return lines
 
