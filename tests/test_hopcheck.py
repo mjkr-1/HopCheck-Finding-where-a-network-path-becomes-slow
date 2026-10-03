@@ -83,7 +83,7 @@ class RouteTableTests(unittest.TestCase):
         hops[1].echo_suppressed = True
         stats = compute_all(hops)
         text = "\n".join(hopcheck.build_hop_table(stats, analyze(stats)))
-        self.assertIn("6.0 *", text)
+        self.assertIn("6.0 ms *", text)
         self.assertIn("*  RTT from tracert, not echo probes", text)
 
     def test_fully_measured_hops_carry_no_marker_or_footnote(self):

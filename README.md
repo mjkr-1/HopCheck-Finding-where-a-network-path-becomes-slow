@@ -273,13 +273,13 @@ Tracing and measuring route (up to 45 seconds)...
 
 ROUTE AND MEASUREMENTS
 ------------------------------------------------------------
-Hop  IP Address          Min      Avg     Max   Loss  Status
--------------------------------------------------------------------------
-1    10.65.17.72         2.0      4.2     6.0     0%  NORMAL
-2    192.0.0.1           6.3    6.3 *     6.3   100%  NORMAL
-3    *                     -        -       -   100%  TIMEOUT
+Hop  IP Address           Min       Avg      Max   Loss  Status
+----------------------------------------------------------------------------
+1    10.65.17.72       3.0 ms    4.4 ms   5.0 ms     0%  NORMAL
+2    192.0.0.1         3.0 ms  7.7 ms *  15.0 ms   100%  NORMAL
+3    *                      -         -        -   100%  TIMEOUT
   ...
-15   163.70.146.174     87.0     94.0   101.0     0%  DESTINATION
+15   163.70.146.174   45.0 ms   60.2 ms  81.0 ms     0%  DESTINATION
 
 *  RTT from tracert, not echo probes (see Analysis)
 

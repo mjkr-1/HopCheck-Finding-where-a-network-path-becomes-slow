@@ -145,9 +145,9 @@ def build_hop_table(stats: Sequence[HopStats], analysis: Analysis) -> List[str]:
             (
                 entry.hop,
                 entry.address if entry.responded else "*",
-                utils.format_ms(entry.min_rtt, suffix=""),
-                utils.format_ms(entry.avg_rtt, suffix=mark),
-                utils.format_ms(entry.max_rtt, suffix=""),
+                utils.format_ms(entry.min_rtt),
+                utils.format_ms(entry.avg_rtt, suffix=" ms" + mark),
+                utils.format_ms(entry.max_rtt),
                 utils.format_percent(entry.loss_percent),
                 statuses.get(entry.hop, ""),
             )
