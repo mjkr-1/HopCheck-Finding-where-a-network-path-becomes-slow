@@ -50,6 +50,29 @@ class EntryPointTests(unittest.TestCase):
         self.assertIn("Interrupted", buffer.getvalue())
 
 
+class TraceEstimateTests(unittest.TestCase):
+    """The banner must promise a realistic time, for both trace passes."""
+
+    def test_quick_bound_is_stricter_than_the_full_bound(self):
+        quick, full = hopcheck.tracing_estimate(max_hops=15, probes=5)
+        self.assertLess(quick, full)
+
+    def test_quick_bound_accounts_for_the_probe_count(self):
+        with_one = hopcheck.tracing_estimate(15, 1)
+        with_many = hopcheck.tracing_estimate(15, 20)
+        self.assertEqual(with_many[0] - with_one[0], 19)
+        self.assertEqual(with_many[1] - with_one[1], 19)
+
+    def test_bound_grows_with_the_hop_limit(self):
+        self.assertLess(hopcheck.tracing_estimate(5, 5)[0], hopcheck.tracing_estimate(40, 5)[0])
+
+    def test_fallback_note_matches_the_progress_indentation(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            hopcheck._print_retry()
+        self.assertTrue(buffer.getvalue().startswith("  ("))
+
+
 class TraceFamilyTests(unittest.TestCase):
     def test_ipv4_hops_are_reported_as_ipv4(self):
         self.assertEqual(hopcheck._trace_family(make_hops([2.0, 3.0])), "IPv4")

@@ -245,7 +245,7 @@ To exit at any time, press `Ctrl+C`.
 ## 9. Example Output
 
 A real captured run on a Windows 11 host whose ISP edge drops ICMP for every
-transit hop (`instagram.com`, 5 probes, 15 hops):
+transit hop (`8.8.8.8`, 5 probes, 15 hops):
 
 ```
 ============================================================
@@ -253,52 +253,53 @@ transit hop (`instagram.com`, 5 probes, 15 hops):
          Finding Where a Network Path Becomes Slow
 ============================================================
 
-Enter destination: instagram.com
+Enter destination: 8.8.8.8
 Enter probes per hop [5]:
 Enter maximum hops [15]:
 
-Destination     : instagram.com
-Resolved IP     : 163.70.146.174
+Destination     : 8.8.8.8
+Resolved IP     : 8.8.8.8
 Probe Count     : 5
 Maximum Hop     : 15
 Probe Timeout   : 1.0 s
 
-Tracing and measuring route (up to 45 seconds)...
+Tracing and measuring route (usually under 28 s, up to 51 s if a
+slower trace is needed)...
 
-  1   10.65.17.72        4.2 ms
-  2   192.0.0.1          6.3 ms
+  1   10.65.17.72
+  2   192.0.0.1
   3   *  Request timed out.
   ...
-  15  163.70.146.174    94.0 ms
+  13  8.8.8.8
 
 ROUTE AND MEASUREMENTS
 ------------------------------------------------------------
-Hop  IP Address           Min       Avg      Max   Loss  Status
+Hop  IP Address           Min       Avg       Max   Loss  Status
 ----------------------------------------------------------------------------
-1    10.65.17.72       3.0 ms    4.4 ms   5.0 ms     0%  NORMAL
-2    192.0.0.1         3.0 ms  7.7 ms *  15.0 ms   100%  NORMAL
-3    *                      -         -        -   100%  TIMEOUT
+1    10.65.17.72       3.0 ms    4.6 ms    5.0 ms     0%  NORMAL
+2    192.0.0.1         3.0 ms  3.7 ms *   4.0 ms   100%  NORMAL
+3    *                      -         -         -   100%  TIMEOUT
   ...
-15   163.70.146.174   45.0 ms   60.2 ms  81.0 ms     0%  DESTINATION
+13   8.8.8.8          68.0 ms   81.0 ms   97.0 ms     0%  DESTINATION
 
 *  RTT from tracert, not echo probes (see Analysis)
 
 ANALYSIS
 ------------------------------------------------------------
 
-Latency increase detected at the destination (Hop 15).
+Latency increase detected at the destination (Hop 13).
 
-Previous average RTT  : 6.3 ms  (Hop 2)
-Hop 15 average RTT    : 94.0 ms
-Increase              : +87.7 ms
+Latency rose from 3.7 ms at Hop 2 to 81.0 ms at Hop 13 (+77.3 ms).
 
-The delay was added somewhere between Hop 2 and Hop 15,
+The delay was added somewhere between Hop 2 and Hop 13,
 but the hops in between never answered, so the exact point
 where it was added cannot be determined from this run.
 
-Hops 3-14 did not respond to any probe (12 hops).
+Hops 3-12 did not respond to any probe (10 hops).
 Routers commonly de-prioritise ICMP, so this does not by itself
-mean the path is broken: Hop 15 still answers.
+mean the path is broken: Hop 13 still answers.
+
+Hop 2 answered tracert but ignored all 5 echo probes, so its RTT is a single sample (marked *).
 
 Assessment: INCREASED PATH LATENCY, SLOW HOP NOT IDENTIFIED
 
@@ -309,9 +310,20 @@ at one hop alone is not sufficient evidence of network slowdown.
 ```
 
 Note the two honesty details in that output: hop 2 carries 100 % loss yet is
-still `NORMAL` (because hop 15 answers, so the path is not broken), and its RTT
+still `NORMAL` (because hop 13 answers, so the path is not broken), and its RTT
 is flagged `*` because it is a single `tracert` sample rather than five measured
 probes.
+
+### How long a run takes
+
+Discovery sends three probes per TTL and, on this path, ten of the thirteen hops
+ignore them. Windows `tracert` clamps `-w` to a 500 ms floor, so a silent hop
+costs at least 1.5 s and the whole trace about 17 s; HopCheck therefore starts
+with a 500 ms trace and only repeats it at the full 1 s when that fails to reach
+the destination. Measurement then costs about 4 s for each hop that answers,
+because Windows `ping` spaces its five probes roughly a second apart. A run like
+the one above therefore finishes in about half a minute, down from roughly fifty
+seconds.
 
 ### Simulated path showing a real slowdown
 
@@ -433,7 +445,7 @@ Run the tests (no internet connection required):
 python -m unittest discover -s tests -v
 ```
 
-The suite has 128 tests covering the analysis rules, the Windows command-line
+The suite has 138 tests covering the analysis rules, the Windows command-line
 output parsers, name resolution and IPv6 fallback, the input validation, the
 terminal formatting and the diagnosis text.
 

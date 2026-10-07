@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from traceroute import (  # noqa: E402
+    FAST_TRACE_TIMEOUT,
     Hop,
     TracerouteError,
     build_ping_command,
@@ -291,6 +292,73 @@ Trace complete.
             hops = discover_route("google.com", max_hops=6, resolved_ip="142.251.126.138")
         self.assertEqual(runner.call_count, 1)
         self.assertTrue(hops[-1].is_destination)
+
+
+class SpeedTests(unittest.TestCase):
+    """The quick discovery pass must be quick, and must never lose the route."""
+
+    def _waits(self, runner):
+        return [
+            call[0][0][call[0][0].index("-w") + 1] for call in runner.call_args_list
+        ]
+
+    def test_quick_pass_waits_only_500_ms_per_reply(self):
+        with mock.patch("traceroute._run", return_value=TRACERT_OUTPUT) as runner:
+            discover_route("google.com", max_hops=6, resolved_ip="142.251.126.138")
+        self.assertEqual(runner.call_count, 1)
+        self.assertEqual(self._waits(runner), ["500"])
+
+    def test_quick_pass_stopping_short_falls_back_to_a_full_wait(self):
+        with mock.patch(
+            "traceroute._run", side_effect=[TRACERT_TEXTUAL_TIMEOUT, "", TRACERT_OUTPUT]
+        ) as runner:
+            hops = discover_route("google.com", max_hops=6, resolved_ip="142.251.126.138")
+        self.assertEqual(self._waits(runner), ["500", "500", "1000"])
+        self.assertTrue(hops[-1].is_destination)
+
+    def test_fallback_note_is_raised_once_not_once_per_pass(self):
+        notes = []
+        with mock.patch(
+            "traceroute._run", side_effect=[TRACERT_TEXTUAL_TIMEOUT, "", TRACERT_OUTPUT]
+        ):
+            discover_route(
+                "google.com",
+                max_hops=6,
+                resolved_ip="142.251.126.138",
+                on_retry=lambda: notes.append(1),
+            )
+        self.assertEqual(notes, [1])
+
+    def test_no_fallback_note_when_the_quick_pass_succeeds(self):
+        notes = []
+        with mock.patch("traceroute._run", return_value=TRACERT_OUTPUT):
+            discover_route(
+                "google.com",
+                max_hops=6,
+                resolved_ip="142.251.126.138",
+                on_retry=lambda: notes.append(1),
+            )
+        self.assertEqual(notes, [])
+
+    def test_partial_quick_result_is_kept_when_nothing_reaches_the_destination(self):
+        """A short trace still beats no trace, and must not raise."""
+        with mock.patch(
+            "traceroute._run",
+            side_effect=[TRACERT_TEXTUAL_TIMEOUT, "", "", ""],
+        ):
+            hops = discover_route("google.com", max_hops=6, resolved_ip="142.251.126.138")
+        self.assertEqual(len(hops), 4)
+        self.assertTrue(hops[0].responded)
+        self.assertFalse(any(hop.is_destination for hop in hops))
+
+    def test_fast_and_slow_passes_use_the_same_command_shape(self):
+        """Only -w may differ, so parsing stays valid for both passes."""
+        quick = build_tracert_command("google.com", 12, FAST_TRACE_TIMEOUT)
+        slow = build_tracert_command("google.com", 12, 1.0)
+        self.assertEqual(
+            [token for token in quick if token != quick[quick.index("-w") + 1]],
+            [token for token in slow if token != slow[slow.index("-w") + 1]],
+        )
 
 
 if __name__ == "__main__":

@@ -32,10 +32,24 @@ import re
 import socket
 import subprocess
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
 
 TRACERT = "tracert"
 PING = "ping"
+
+#: Windows tracert sends this many probes to every TTL position.  It is fixed:
+#: this machine's tracert has no -q switch, so only the per-reply wait can be
+#: shortened to make discovery faster.
+TRACERT_PROBES_PER_HOP = 3
+
+#: Per-reply wait, in seconds, used by the quick discovery pass.
+#:
+#: Windows tracert silently clamps `-w` to 500 ms, so anything lower behaves
+#: exactly like 0.5 and any larger value only slows the trace down.  On a path
+#: whose intermediate routers drop ICMP, every hop then costs
+#: `TRACERT_PROBES_PER_HOP * 0.5` seconds, which is the single biggest component
+#: of a run: 10 silent hops take 15 s at 0.5 s and 30 s at 1.0 s.
+FAST_TRACE_TIMEOUT = 0.5
 
 _HOP_LINE_RE = re.compile(r"^\s{0,8}(?P<hop>\d{1,3})\s+(?P<rest>\S.*)$")
 _RTT_RE = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*ms\b", re.IGNORECASE)
@@ -157,7 +171,9 @@ def build_tracert_command(
 
     `force_ipv4` adds -4.  IPv4 is tried first because this project analyses IPv4
     hops; on an IPv6-preferring host the flag can make tracert fail, so the
-    caller retries without it.
+    caller retries without it.  `timeout` is the wait for *each* reply, so one
+    hop costs up to `TRACERT_PROBES_PER_HOP * timeout` seconds when it stays
+    silent.
     """
     command = [TRACERT, "-d"]
     if force_ipv4:
@@ -169,6 +185,33 @@ def build_tracert_command(
         str(_timeout_ms(timeout)),
         destination,
     ]
+
+
+def _discovery_passes(timeout: float) -> List[Tuple[bool, bool]]:
+    """`(quick, force_ipv4)` for each tracert attempt, cheapest first.
+
+    A trace that loses every intermediate router costs
+    `max_hops * TRACERT_PROBES_PER_HOP * timeout` seconds, and on a path where
+    the transit routers drop ICMP that is the entire run.  Waiting 0.5 s per
+    reply instead of 1 s halves that cost and is still well above the round trip
+    time of a directly connected or regional hop.
+
+    The quick passes are accepted only when they reach the destination; if they
+    stop short the trace is repeated with the full `timeout`, once per address
+    family.  So a too-short wait cannot make a run fail, it can only make it
+    take the long way round.
+    """
+    return [
+        (True, True),
+        (True, False),
+        (False, True),
+        (False, False),
+    ]
+
+
+def _discovery_budget(timeout: float, max_hops: int) -> float:
+    """Upper bound for one tracert run: three probes per hop plus start-up."""
+    return TRACERT_PROBES_PER_HOP * timeout * max_hops + 10.0
 
 
 def build_ping_command(address: str, count: int, timeout: float) -> List[str]:
@@ -281,25 +324,42 @@ def discover_route(
     timeout: float = 1.0,
     on_progress: Optional[Callable[[Hop], None]] = None,
     resolved_ip: Optional[str] = None,
+    on_retry: Optional[Callable[[], None]] = None,
 ) -> List[Hop]:
     """Discover the path to `destination` up to `max_hops` TTL positions.
 
-    IPv4 is tried first and the default (IPv6-capable) family second, because a
-    network can answer for one family and stay silent for the other: an
-    IPv6-native host reached with `tracert -4` often dies at the first ISP router
-    even though `tracert` without the flag walks the whole path.  The retry is
-    triggered by *not reaching the destination*, not merely by an empty trace, and
-    whichever attempt got further is kept.
+    Two things are retried here, both because a single trace can legitimately
+    say nothing about a path that it can actually see.
+
+    First the address family.  IPv4 is tried before the default family because
+    a network can answer for one and stay silent for the other: an IPv6-native
+    host reached with `tracert -4` often dies at the first ISP router even
+    though `tracert` without the flag walks the whole path.
+
+    Second the wait per reply.  The first two passes use `FAST_TRACE_TIMEOUT`,
+    which is fast enough to be the common case; if either reaches the
+    destination the run stops there.  Only when both fall short are the passes
+    repeated with the full `timeout`, so an unusually slow path still gets an
+    accurate trace instead of a short one.
+
+    Whichever attempt got the most hops is kept, and `on_retry` is called once
+    when the run has to fall back to the full wait.
     """
     if resolved_ip is None:
         resolved_ip = resolve_destination(destination)
-    budget = timeout * 3.0 * max_hops + 10.0
 
     best_hops: List[Hop] = []
-    for force_ipv4 in (True, False):
+    notified_slowdown = False
+    for quick, force_ipv4 in _discovery_passes(timeout):
+        pass_timeout = FAST_TRACE_TIMEOUT if quick else timeout
+        if not quick and not notified_slowdown:
+            notified_slowdown = True
+            if on_retry is not None:
+                on_retry()
+
         output = _run(
-            build_tracert_command(destination, max_hops, timeout, force_ipv4=force_ipv4),
-            budget,
+            build_tracert_command(destination, max_hops, pass_timeout, force_ipv4=force_ipv4),
+            _discovery_budget(pass_timeout, max_hops),
         )
 
         lowered = output.lower()

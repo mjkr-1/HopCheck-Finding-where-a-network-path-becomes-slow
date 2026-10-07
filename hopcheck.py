@@ -13,7 +13,7 @@ profile and prints a short diagnosis.  Everything happens locally.
 from __future__ import annotations
 
 import sys
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 import utils
 from analyzer import (
@@ -28,7 +28,15 @@ from analyzer import (
     analyze,
     compute_all,
 )
-from traceroute import Hop, TracerouteError, discover_route, measure_route, resolve_destination
+from traceroute import (
+    FAST_TRACE_TIMEOUT,
+    TRACERT_PROBES_PER_HOP,
+    Hop,
+    TracerouteError,
+    discover_route,
+    measure_route,
+    resolve_destination,
+)
 
 DEFAULT_PROBES = 5
 DEFAULT_MAX_HOPS = 15
@@ -69,7 +77,11 @@ def main() -> int:
         ]
     )
 
-    print("\nTracing and measuring route (up to {0} seconds)...\n".format(int(max_hops * 3)))
+    quick, full = tracing_estimate(max_hops, probes)
+    print(
+        "\nTracing and measuring route (usually under {0} s, up to {1} s if a\n"
+        "slower trace is needed)...\n".format(quick, full)
+    )
     try:
         hops = discover_route(
             destination,
@@ -77,6 +89,7 @@ def main() -> int:
             timeout=PROBE_TIMEOUT,
             resolved_ip=resolved_ip,
             on_progress=_print_progress,
+            on_retry=_print_retry,
         )
         measure_route(hops, probes=probes, timeout=PROBE_TIMEOUT)
     except TracerouteError as exc:
@@ -108,6 +121,25 @@ def _trace_family(hops: Sequence[Hop]) -> str:
         if hop.address and ":" in hop.address:
             return "IPv6"
     return "IPv4"
+
+
+def tracing_estimate(max_hops: int, probes: int) -> Tuple[int, int]:
+    """Upper bounds in seconds for the quick trace and for a full-fidelity one.
+
+    tracert sends `TRACERT_PROBES_PER_HOP` probes to every hop and waits
+    `FAST_TRACE_TIMEOUT` per reply on a quick pass, `PROBE_TIMEOUT` on a
+    fallback; then every hop that answered is pinged `probes` times at
+    `PROBE_TIMEOUT`.  A hop that drops ICMP therefore costs three waits, and a
+    hop that answers tracert but ignores echo requests costs `probes`.
+    """
+    quick = max_hops * TRACERT_PROBES_PER_HOP * FAST_TRACE_TIMEOUT + probes * PROBE_TIMEOUT
+    full = max_hops * TRACERT_PROBES_PER_HOP * PROBE_TIMEOUT + probes * PROBE_TIMEOUT
+    return int(quick) + 1, int(full) + 1
+
+
+def _print_retry() -> None:
+    """Explain why the run is about to slow down, so the banner still adds up."""
+    print("  (quick trace stopped short - retrying with a longer per-hop wait)")
 
 
 def _print_progress(hop: Hop) -> None:
